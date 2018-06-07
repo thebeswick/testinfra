@@ -23,32 +23,40 @@ from testinfra.modules.socket import parse_socketspec
 all_images = pytest.mark.testinfra_hosts(*[
     "docker://{}".format(image)
     for image in (
-        "debian_jessie", "centos_7", "ubuntu_trusty", "fedora",
-        "ubuntu_xenial",
+        "alpine_35", "archlinux", "centos_6", "centos_7",
+        "debian_stretch", "fedora", "ubuntu_xenial"
     )
 ])
 
 
 @all_images
 def test_package(host, docker_image):
-    ssh = host.package("openssh-server")
+    assert not host.package('zsh').is_installed
+    if docker_image in ("alpine_35", "archlinux"):
+        name = "openssh"
+    else:
+        name = "openssh-server"
+
+    ssh = host.package(name)
     version = {
-        "debian_jessie": "1:6.7",
-        "debian_wheezy": "1:6.0",
-        "fedora": "7.",
-        "ubuntu_trusty": "1:6.6",
-        "ubuntu_xenial": "1:7.2",
+        "alpine_35": "7.",
+        "archlinux": "7.",
+        "centos_6": "5.",
         "centos_7": "7.",
+        "debian_stretch": "1:7.4",
+        "fedora": "7.",
+        "ubuntu_xenial": "1:7.2"
     }[docker_image]
     assert ssh.is_installed
     assert ssh.version.startswith(version)
     release = {
-        "fedora": ".fc25",
+        "alpine_35": "r1",
+        "archlinux": None,
+        "centos_6": ".el6",
         "centos_7": ".el7",
-        "debian_jessie": None,
-        "debian_wheezy": None,
-        "ubuntu_trusty": None,
-        "ubuntu_xenial": None,
+        "debian_stretch": None,
+        "fedora": ".fc27",
+        "ubuntu_xenial": None
     }[docker_image]
     if release is None:
         with pytest.raises(NotImplementedError):
@@ -60,7 +68,21 @@ def test_package(host, docker_image):
 def test_held_package(host):
     python = host.package("python")
     assert python.is_installed
-    assert python.version.startswith("2.7.9")
+    assert python.version.startswith("2.7.")
+
+
+@pytest.mark.destructive
+def test_uninstalled_package_version(host):
+    with pytest.raises(AssertionError) as excinfo:
+        host.package('zsh').version
+    assert 'Unexpected exit code 1 for CommandResult' in str(excinfo.value)
+    assert host.package('sudo').is_installed
+    host.check_output('apt-get -y remove sudo')
+    assert not host.package('sudo').is_installed
+    with pytest.raises(AssertionError) as excinfo:
+        host.package('sudo').version
+    assert ('The package sudo is not installed, dpkg-query output: '
+            'deinstall ok config-files 1.8.') in str(excinfo.value)
 
 
 @all_images
@@ -68,12 +90,13 @@ def test_systeminfo(host, docker_image):
     assert host.system_info.type == "linux"
 
     release, distribution, codename = {
-        "debian_jessie": ("^8\.", "debian", "jessie"),
-        "debian_wheezy": ("^7$", "debian", None),
+        "alpine_35": ("^3\.5\.", "alpine", None),
+        "archlinux": ("rolling", "arch", None),
+        "centos_6": (r"^6", "CentOS", None),
         "centos_7": ("^7$", "centos", None),
-        "fedora": ("^25$", "fedora", None),
-        "ubuntu_trusty": ("^14\.04$", "ubuntu", "trusty"),
-        "ubuntu_xenial": ("^16\.04$", "ubuntu", "xenial"),
+        "debian_stretch": ("^9\.", "debian", "stretch"),
+        "fedora": ("^27$", "fedora", None),
+        "ubuntu_xenial": ("^16\.04$", "ubuntu", "xenial")
     }[docker_image]
 
     assert host.system_info.distribution == distribution
@@ -83,7 +106,8 @@ def test_systeminfo(host, docker_image):
 
 @all_images
 def test_ssh_service(host, docker_image):
-    if docker_image in ("centos_7", "fedora"):
+    if docker_image in ("centos_6", "centos_7", "fedora",
+                        "alpine_35", "archlinux"):
         name = "sshd"
     else:
         name = "ssh"
@@ -91,10 +115,11 @@ def test_ssh_service(host, docker_image):
     ssh = host.service(name)
     if docker_image == "ubuntu_xenial":
         assert not ssh.is_running
-    else:
+    # FIXME: is_running test is broken for archlinux for unknown reason
+    elif docker_image != "archlinux":
         assert ssh.is_running
 
-    if docker_image in ("ubuntu_trusty", "ubuntu_xenial"):
+    if docker_image == "ubuntu_xenial":
         assert not ssh.is_enabled
     else:
         assert ssh.is_enabled
@@ -112,18 +137,18 @@ def test_service(host, name, running, enabled):
 
 def test_salt(host):
     ssh_version = host.salt("pkg.version", "openssh-server", local=True)
-    assert ssh_version.startswith("1:6.7")
+    assert ssh_version.startswith("1:7.4")
 
 
 def test_puppet_resource(host):
     resource = host.puppet_resource("package", "openssh-server")
-    assert resource["openssh-server"]["ensure"].startswith("1:6.7")
+    assert resource["openssh-server"]["ensure"].startswith("1:7.4")
 
 
 def test_facter(host):
-    assert host.facter()["lsbdistcodename"] == "jessie"
+    assert host.facter()["lsbdistcodename"] == "stretch"
     assert host.facter("lsbdistcodename") == {
-        "lsbdistcodename": "jessie",
+        "lsbdistcodename": "stretch",
     }
 
 
@@ -154,6 +179,7 @@ def test_socket(host):
         "tcp://127.0.0.1:22",
         "tcp://:::22",
         "tcp://::1:22",
+        "unix:///run/systemd/private",
     ):
         socket = host.socket(spec)
         assert socket.is_listening
@@ -173,15 +199,19 @@ def test_socket(host):
 def test_process(host, docker_image):
     init = host.process.get(pid=1)
     assert init.ppid == 0
-    assert init.euid == 0
+    if docker_image != "alpine_35":
+        # busybox ps doesn't have a euid equivalent
+        assert init.euid == 0
+    assert init.user == "root"
 
     args, comm = {
-        "debian_jessie": ("/sbin/init", "systemd"),
+        "alpine_35": ("/sbin/init", "init"),
+        "archlinux": ("/usr/sbin/init", "systemd"),
+        "centos_6": ("/usr/sbin/sshd -D", "sshd"),
         "centos_7": ("/usr/sbin/init", "systemd"),
+        "debian_stretch": ("/sbin/init", "systemd"),
         "fedora": ("/usr/sbin/init", "systemd"),
-        "ubuntu_trusty": ("/usr/sbin/sshd -D", "sshd"),
-        "ubuntu_xenial": ("/sbin/init", "systemd"),
-        "debian_wheezy": ("/usr/sbin/sshd -D", "sshd"),
+        "ubuntu_xenial": ("/sbin/init", "systemd")
     }[docker_image]
     assert init.args == args
     assert init.comm == comm
@@ -191,13 +221,13 @@ def test_user(host):
     user = host.user("sshd")
     assert user.exists
     assert user.name == "sshd"
-    assert user.uid == 105
+    assert user.uid == 107
     assert user.gid == 65534
     assert user.group == "nogroup"
     assert user.gids == [65534]
     assert user.groups == ["nogroup"]
     assert user.shell == "/usr/sbin/nologin"
-    assert user.home == "/var/run/sshd"
+    assert user.home == "/run/sshd"
     assert user.password == "*"
 
 
@@ -266,25 +296,31 @@ def test_file(host):
     assert l.is_symlink
     assert l.is_file
     assert l.linked_to == "/d/f"
+    assert l.linked_to == f
+    assert f == f
+    assert not d == f
 
     host.check_output("rm -f /d/p && mkfifo /d/p")
     assert host.file("/d/p").is_pipe
 
 
 def test_ansible_unavailable(host):
+    expected = ('Ansible module is only available with '
+                'ansible connection backend')
     with pytest.raises(RuntimeError) as excinfo:
         host.ansible("setup")
-    assert (
-        'Ansible module is only available with ansible '
-        'connection backend') in str(excinfo.value)
+    assert expected in str(excinfo.value)
+    with pytest.raises(RuntimeError) as excinfo:
+        host.ansible.get_variables()
+    assert expected in str(excinfo.value)
 
 
-@pytest.mark.testinfra_hosts("ansible://debian_jessie")
+@pytest.mark.testinfra_hosts("ansible://debian_stretch")
 def test_ansible_module(host):
     import ansible
     version = int(ansible.__version__.split(".", 1)[0])
     setup = host.ansible("setup")["ansible_facts"]
-    assert setup["ansible_lsb"]["codename"] == "jessie"
+    assert setup["ansible_lsb"]["codename"] == "stretch"
     passwd = host.ansible("file", "path=/etc/passwd state=file")
     assert passwd["changed"] is False
     assert passwd["gid"] == 0
@@ -301,7 +337,7 @@ def test_ansible_module(host):
     assert variables["myvar"] == "foo"
     assert variables["myhostvar"] == "bar"
     assert variables["mygroupvar"] == "qux"
-    assert variables["inventory_hostname"] == "debian_jessie"
+    assert variables["inventory_hostname"] == "debian_stretch"
     assert variables["group_names"] == ["testgroup"]
 
     with pytest.raises(host.ansible.AnsibleException) as excinfo:
@@ -403,7 +439,7 @@ def test_sudo_fail_from_root(host):
         assert host.user().name == "root"
 
 
-@pytest.mark.testinfra_hosts("docker://user@debian_jessie")
+@pytest.mark.testinfra_hosts("docker://user@debian_stretch")
 def test_sudo_to_root(host):
     assert host.user().name == "user"
     with host.sudo():
@@ -415,7 +451,7 @@ def test_sudo_to_root(host):
 
 
 def test_pip_package(host):
-    assert host.pip_package.get_packages()['pip']['version'] == '1.5.6'
+    assert host.pip_package.get_packages()['pip']['version'] == '9.0.1'
     pytest = host.pip_package.get_packages(pip_path='/v/bin/pip')['pytest']
     assert pytest['version'].startswith('2.')
     outdated = host.pip_package.get_outdated_packages(

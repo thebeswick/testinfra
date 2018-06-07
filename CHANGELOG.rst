@@ -2,6 +2,46 @@
 Changelog
 =========
 
+1.14.0
+======
+
+* Add a new lxc backend
+* Socket: fix is_listening for unix sockets
+* Add namespace and container support for kubernetes backend
+* Add a cache of parsed ansible inventories for ansible backend
+* Service: fix service detection on Centos 6 hosts
+* File: implement file comparison with string paths
+
+1.13.1
+======
+
+* package: fix is_installed and version behavior for uninstalled packages (#321 and #326)
+* ansible: Use predictibles test ordering when using pytest-xdist to fix random test collections errors (#316)
+
+1.13.0
+======
+
+* socket: fix detection of udp listening sockets (#311)
+* ssh backend: Add support for GSSAPI
+
+1.12.0
+======
+
+* ansible: fix compatibility with ansible 2.5
+* pip: fix compatibility with pip 10 (#299)
+
+1.11.1
+======
+
+* Socket: fix error with old versions of ss without the --no-header option (#293)
+
+1.11.0
+======
+
+* Fix bad error reporting when using ansible module without ansible backend (#288)
+* Socket: add a new implementation using ss instead of netstat (#124)
+* Add service, process, and systeminfo support for Alpine (#283)
+
 1.10.1
 ======
 

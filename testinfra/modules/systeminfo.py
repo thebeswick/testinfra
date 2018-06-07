@@ -73,6 +73,9 @@ class SystemInfo(InstanceModule):
                         sysinfo[attname] = (
                             line[len(key):].replace('"', "").
                             replace("'", "").strip())
+            # Arch doesn't have releases
+            if sysinfo["distribution"] == "arch":
+                sysinfo["release"] = "rolling"
             return sysinfo
 
         # RedHat / CentOS 6 haven't /etc/os-release
@@ -85,6 +88,13 @@ class SystemInfo(InstanceModule):
                 sysinfo["distribution"], sysinfo["release"] = (
                     match.groups())
                 return sysinfo
+
+        # Alpine doesn't have /etc/os-release
+        alpine_release = self.run("cat /etc/alpine-release")
+        if alpine_release.rc == 0:
+            sysinfo["distribution"] = "alpine"
+            sysinfo["release"] = alpine_release.stdout.strip()
+            return sysinfo
 
         return sysinfo
 

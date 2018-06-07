@@ -32,11 +32,13 @@ class Package(Module):
 
         Supported package systems:
 
+        - apk (Alpine)
         - apt (Debian, Ubuntu, ...)
-        - rpm (RHEL, Centos, Fedora, ...)
-        - pkg_info (OpenBSD)
-        - pkg_info (NetBSD)
+        - pacman (Arch)
         - pkg (FreeBSD)
+        - pkg_info (NetBSD)
+        - pkg_info (OpenBSD)
+        - rpm (RHEL, Centos, Fedora, ...)
         """
         raise NotImplementedError
 
@@ -71,6 +73,10 @@ class Package(Module):
             return DebianPackage
         elif host.exists("rpm"):
             return RpmPackage
+        elif host.exists("apk"):
+            return AlpinePackage
+        elif host.system_info.distribution == "arch":
+            return ArchPackage
         else:
             raise NotImplementedError
 
@@ -79,8 +85,10 @@ class DebianPackage(Package):
 
     @property
     def is_installed(self):
-        out = self.check_output("dpkg-query -f '${Status}' -W %s" % (
-            self.name,)).split()
+        result = self.run_test("dpkg-query -f '${Status}' -W %s", self.name)
+        if result.rc == 1:
+            return False
+        out = result.stdout.strip().split()
         installed_status = ["ok", "installed"]
         return out[0] in ["install", "hold"] and out[1:3] == installed_status
 
@@ -90,10 +98,13 @@ class DebianPackage(Package):
 
     @property
     def version(self):
-        out = self.check_output("dpkg-query -f '${Status} ${Version}' -W %s"
-                                % (self.name,)).split()
-        if out[0].lower() in ["install", "hold"]:
-            return out[3]
+        out = self.check_output("dpkg-query -f '${Status} ${Version}' -W %s",
+                                self.name)
+        splitted = out.split()
+        assert splitted[0].lower() in ('install', 'hold'), (
+            "The package %s is not installed, dpkg-query output: %s" % (
+                self.name, out))
+        return splitted[3]
 
 
 class FreeBSDPackage(Package):
@@ -146,3 +157,36 @@ class RpmPackage(Package):
     def release(self):
         return self.check_output('rpm -q --queryformat="%%{RELEASE}" %s',
                                  self.name)
+
+
+class AlpinePackage(Package):
+
+    @property
+    def is_installed(self):
+        return self.run_test("apk -e info %s", self.name).rc == 0
+
+    @property
+    def version(self):
+        out = self.check_output("apk -e -v info %s", self.name).split("-")
+        return out[-2]
+
+    @property
+    def release(self):
+        out = self.check_output("apk -e -v info %s", self.name).split("-")
+        return out[-1]
+
+
+class ArchPackage(Package):
+
+    @property
+    def is_installed(self):
+        return self.run_test("pacman -Q %s", self.name).rc == 0
+
+    @property
+    def version(self):
+        out = self.check_output("pacman -Q %s", self.name).split(" ")
+        return out[1]
+
+    @property
+    def release(self):
+        raise NotImplementedError
