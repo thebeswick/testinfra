@@ -63,12 +63,11 @@ ANSIBLE_HOSTVARS = """$ANSIBLE_VAULT;1.1;AES256
 """
 
 DOCKER_IMAGES = [
-    "alpine_35",
+    "alpine_38",
     "archlinux",
     "centos_6",
     "centos_7",
     "debian_stretch",
-    "fedora",
     "ubuntu_xenial",
 ]
 
@@ -159,8 +158,10 @@ def host(request, tmpdir_factory):
     image, kw = parse_hostspec(request.param)
     spec = BaseBackend.parse_hostspec(image)
 
-    if getattr(request.function, "destructive", None) is not None:
-        scope = "function"
+    for marker in getattr(request.function, 'pytestmark', []):
+        if marker.name == 'destructive':
+            scope = "function"
+            break
     else:
         scope = "session"
 
@@ -206,8 +207,7 @@ def host(request, tmpdir_factory):
         images_with_sshd = (
             "centos_6",
             "centos_7",
-            "fedora",
-            "alpine_35",
+            "alpine_38",
             "archlinux"
         )
 
@@ -236,13 +236,13 @@ def docker_image(host):
 
 def pytest_generate_tests(metafunc):
     if "host" in metafunc.fixturenames:
-        marker = getattr(metafunc.function, "testinfra_hosts", None)
-        if marker is not None:
-            hosts = marker.args
+        for marker in getattr(metafunc.function, 'pytestmark', []):
+            if marker.name == 'testinfra_hosts':
+                hosts = marker.args
+                break
         else:
             # Default
             hosts = ["docker://debian_stretch"]
-
         metafunc.parametrize("host", hosts, indirect=True,
                              scope="function")
 

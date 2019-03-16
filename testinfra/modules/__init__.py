@@ -15,11 +15,11 @@ from __future__ import unicode_literals
 
 import importlib
 
-import testinfra.utils
-
 modules = {
+    'addr': 'addr:Addr',
     'ansible': 'ansible:Ansible',
     'command': 'command:Command',
+    'docker': 'docker:Docker',
     'file': 'file:File',
     'group': 'group:Group',
     'interface': 'interface:Interface',
@@ -42,7 +42,6 @@ modules = {
 
 
 def get_module_class(name):
-    name = testinfra.utils.un_camel_case(name)
     modname, classname = modules[name].split(':')
     modname = '.'.join([__name__, modname])
     module = importlib.import_module(modname)

@@ -18,13 +18,18 @@ import re
 import time
 
 import pytest
+
+from ipaddress import ip_address
+from ipaddress import IPv4Address
+from ipaddress import IPv6Address
+
 from testinfra.modules.socket import parse_socketspec
 
 all_images = pytest.mark.testinfra_hosts(*[
     "docker://{}".format(image)
     for image in (
-        "alpine_35", "archlinux", "centos_6", "centos_7",
-        "debian_stretch", "fedora", "ubuntu_xenial"
+        "alpine_38", "archlinux", "centos_6", "centos_7",
+        "debian_stretch", "ubuntu_xenial"
     )
 ])
 
@@ -32,30 +37,28 @@ all_images = pytest.mark.testinfra_hosts(*[
 @all_images
 def test_package(host, docker_image):
     assert not host.package('zsh').is_installed
-    if docker_image in ("alpine_35", "archlinux"):
+    if docker_image in ("alpine_38", "archlinux"):
         name = "openssh"
     else:
         name = "openssh-server"
 
     ssh = host.package(name)
     version = {
-        "alpine_35": "7.",
+        "alpine_38": "7.",
         "archlinux": "7.",
         "centos_6": "5.",
         "centos_7": "7.",
         "debian_stretch": "1:7.4",
-        "fedora": "7.",
         "ubuntu_xenial": "1:7.2"
     }[docker_image]
     assert ssh.is_installed
     assert ssh.version.startswith(version)
     release = {
-        "alpine_35": "r1",
+        "alpine_38": "r3",
         "archlinux": None,
         "centos_6": ".el6",
         "centos_7": ".el7",
         "debian_stretch": None,
-        "fedora": ".fc27",
         "ubuntu_xenial": None
     }[docker_image]
     if release is None:
@@ -90,12 +93,11 @@ def test_systeminfo(host, docker_image):
     assert host.system_info.type == "linux"
 
     release, distribution, codename = {
-        "alpine_35": ("^3\.5\.", "alpine", None),
+        "alpine_38": ("^3\.8\.", "alpine", None),
         "archlinux": ("rolling", "arch", None),
         "centos_6": (r"^6", "CentOS", None),
         "centos_7": ("^7$", "centos", None),
         "debian_stretch": ("^9\.", "debian", "stretch"),
-        "fedora": ("^27$", "fedora", None),
         "ubuntu_xenial": ("^16\.04$", "ubuntu", "xenial")
     }[docker_image]
 
@@ -106,8 +108,8 @@ def test_systeminfo(host, docker_image):
 
 @all_images
 def test_ssh_service(host, docker_image):
-    if docker_image in ("centos_6", "centos_7", "fedora",
-                        "alpine_35", "archlinux"):
+    if docker_image in ("centos_6", "centos_7",
+                        "alpine_38", "archlinux"):
         name = "sshd"
     else:
         name = "ssh"
@@ -199,18 +201,17 @@ def test_socket(host):
 def test_process(host, docker_image):
     init = host.process.get(pid=1)
     assert init.ppid == 0
-    if docker_image != "alpine_35":
+    if docker_image != "alpine_38":
         # busybox ps doesn't have a euid equivalent
         assert init.euid == 0
     assert init.user == "root"
 
     args, comm = {
-        "alpine_35": ("/sbin/init", "init"),
+        "alpine_38": ("/sbin/init", "init"),
         "archlinux": ("/usr/sbin/init", "systemd"),
         "centos_6": ("/usr/sbin/sshd -D", "sshd"),
         "centos_7": ("/usr/sbin/init", "systemd"),
         "debian_stretch": ("/sbin/init", "systemd"),
-        "fedora": ("/usr/sbin/init", "systemd"),
         "ubuntu_xenial": ("/sbin/init", "systemd")
     }[docker_image]
     assert init.args == args
@@ -297,7 +298,7 @@ def test_file(host):
     assert l.is_file
     assert l.linked_to == "/d/f"
     assert l.linked_to == f
-    assert f == f
+    assert f == host.file('/d/f')
     assert not d == f
 
     host.check_output("rm -f /d/p && mkfifo /d/p")
@@ -360,6 +361,23 @@ def test_ansible_module(host):
 
     result = host.ansible("command", "echo foo", check=False)
     assert result['stdout'] == 'foo'
+
+
+@pytest.mark.testinfra_hosts("ansible://debian_stretch",
+                             "ansible://user@debian_stretch")
+def test_ansible_module_become(host):
+    user_name = host.user().name
+    assert host.ansible('shell', 'echo $USER',
+                        check=False)['stdout'] == user_name
+    assert host.ansible('shell', 'echo $USER',
+                        check=False, become=True)['stdout'] == 'root'
+
+    with host.sudo():
+        assert host.user().name == 'root'
+        assert host.ansible('shell', 'echo $USER',
+                            check=False)['stdout'] == user_name
+        assert host.ansible('shell', 'echo $USER',
+                            check=False, become=True)['stdout'] == 'root'
 
 
 @pytest.mark.destructive
@@ -450,6 +468,11 @@ def test_sudo_to_root(host):
     assert host.user().name == "user"
 
 
+def test_command_execution(host):
+    assert host.run("false").failed
+    assert host.run("true").succeeded
+
+
 def test_pip_package(host):
     assert host.pip_package.get_packages()['pip']['version'] == '9.0.1'
     pytest = host.pip_package.get_packages(pip_path='/v/bin/pip')['pytest']
@@ -473,3 +496,49 @@ def test_iptables(host):
     assert ssh_rule_str in input_rules
     assert vip_redirect_rule_str in nat_rules
     assert vip_redirect_rule_str in nat_prerouting_rules
+    # test ip6tables call works; ipv6 setup is a whole huge thing, but
+    # ensure we at least see the headings
+    v6_rules = host.iptables.rules(version=6)
+    assert '-P INPUT ACCEPT' in v6_rules
+    assert '-P FORWARD ACCEPT' in v6_rules
+    assert '-P OUTPUT ACCEPT' in v6_rules
+    v6_filter_rules = host.iptables.rules('filter', 'INPUT', version=6)
+    assert '-P INPUT ACCEPT' in v6_filter_rules
+
+
+@all_images
+def test_addr(host):
+    non_resolvable = host.addr('some_non_resolvable_host')
+    assert not non_resolvable.is_resolvable
+    assert not non_resolvable.is_reachable
+    assert not non_resolvable.port(80).is_reachable
+
+    # Some arbitrary internal IP, hopefully non reachable
+    # IP addresses are always resolvable no matter what
+    non_reachable_ip = host.addr('10.42.13.73')
+    assert non_reachable_ip.is_resolvable
+    assert non_reachable_ip.ipv4_addresses == ['10.42.13.73']
+    assert not non_reachable_ip.is_reachable
+    assert not non_reachable_ip.port(80).is_reachable
+
+    google_dns = host.addr('8.8.8.8')
+    assert google_dns.is_resolvable
+    assert google_dns.ipv4_addresses == ['8.8.8.8']
+    assert google_dns.is_reachable
+    assert google_dns.port(53).is_reachable
+    assert not google_dns.port(666).is_reachable
+
+    google_addr = host.addr('google.com')
+    assert google_addr.is_resolvable
+    assert google_addr.is_reachable
+    assert google_addr.port(443).is_reachable
+    assert not google_addr.port(666).is_reachable
+
+    for ip in google_addr.ipv4_addresses:
+        assert isinstance(ip_address(ip), IPv4Address)
+
+    for ip in google_addr.ipv6_addresses:
+        assert isinstance(ip_address(ip), IPv6Address)
+
+    for ip in google_addr.ip_addresses:
+        assert isinstance(ip_address(ip), (IPv4Address, IPv6Address))
