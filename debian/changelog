@@ -1,3 +1,9 @@
+testinfra (2.0.0-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Philippe Pepiot <phil@philpep.org>  Sun, 17 Mar 2019 00:00:13 +0100
+
 testinfra (1.14.0-1) unstable; urgency=medium
 
   * New upstream release
